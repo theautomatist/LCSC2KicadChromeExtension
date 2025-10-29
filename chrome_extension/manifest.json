@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "easyeda2kicad Companion",
+  "version": "0.1.0",
+  "description": "Steuert den lokalen easyeda2kicad-Service über eine komfortable Browser-Oberfläche.",
+  "permissions": [
+    "storage",
+    "notifications"
+  ],
+  "host_permissions": [
+    "http://localhost:8087/*",
+    "https://www.lcsc.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.lcsc.com/*"
+      ],
+      "js": ["contentScript.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>easyeda2kicad Companion</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="header">
+        <h1>easyeda2kicad</h1>
+        <span id="connection-status" class="status status-offline">Offline</span>
+      </header>
+
+      <nav class="tabs">
+        <button class="tab-button active" data-tab="jobs">Jobs</button>
+        <button class="tab-button" data-tab="history">History</button>
+        <button class="tab-button" data-tab="settings">Settings</button>
+      </nav>
+
+      <section id="tab-jobs" class="tab-content active">
+        <form id="job-form" class="card">
+          <div class="field">
+            <label for="lcsc-id">LCSC ID</label>
+            <input id="lcsc-id" type="text" placeholder="z. B. C8734" required />
+          </div>
+
+          <div class="field">
+            <label for="library-name">Bibliotheksname</label>
+            <input id="library-name" type="text" placeholder="easyeda2kicad" />
+          </div>
+
+          <div class="field">
+            <label>Bibliothekspfad</label>
+            <div class="path-display">
+              <span id="selected-path">Kein Pfad gewählt</span>
+              <button type="button" id="open-path-browser" class="secondary">
+                Pfad wählen
+              </button>
+            </div>
+          </div>
+
+          <div id="path-browser" class="path-browser hidden">
+            <div class="path-browser-header">
+              <select id="path-roots"></select>
+              <div class="path-browser-controls">
+                <button type="button" id="path-up" class="secondary" title="Eine Ebene nach oben">▲</button>
+                <button type="button" id="path-close" class="secondary" title="Picker schließen">Schließen</button>
+              </div>
+            </div>
+
+            <div class="path-quick" id="path-quick"></div>
+
+            <div class="path-browser-current" id="path-breadcrumb"></div>
+
+            <div class="path-input-row">
+              <input id="path-manual" type="text" placeholder="Pfad eingeben oder einfügen" />
+              <button type="button" id="path-go" class="secondary">Gehe zu</button>
+            </div>
+
+            <ul id="path-entries" class="path-list" tabindex="0" aria-label="Ordnerliste"></ul>
+
+            <div class="path-browser-footer">
+              <div id="path-info" class="path-info"></div>
+              <div class="path-browser-actions">
+                <button type="button" id="path-apply" class="primary">
+                  Diesen Ordner verwenden
+                </button>
+              </div>
+              <p id="path-error" class="error-message"></p>
+            </div>
+          </div>
+
+          <fieldset class="field-group">
+            <legend>Ausgabe</legend>
+            <label class="checkbox">
+              <input type="checkbox" id="generate-symbol" checked />
+              <span>Symbol</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="generate-footprint" />
+              <span>Footprint</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="generate-model" />
+              <span>3D-Modell</span>
+            </label>
+            <label class="checkbox">
+              <input type="checkbox" id="overwrite-existing" />
+              <span>Bestehende Dateien überschreiben</span>
+            </label>
+          </fieldset>
+
+          <button type="submit" id="submit-job" class="primary">Job starten</button>
+          <p id="job-error" class="error-message"></p>
+        </form>
+
+        <div class="card">
+          <h2>Aktive Jobs</h2>
+          <div id="jobs-list" class="job-list empty">
+            <p>Keine aktiven Jobs.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-history" class="tab-content">
+        <div class="card history-header">
+          <h2>Verlauf</h2>
+          <button type="button" id="clear-history" class="secondary">Verlauf löschen</button>
+        </div>
+        <div id="history-list" class="history-list card empty">
+          <p>Noch keine Einträge.</p>
+        </div>
+      </section>
+
+      <section id="tab-settings" class="tab-content">
+        <div class="card">
+          <div class="field">
+            <label for="setting-server-url">Server-URL</label>
+            <input id="setting-server-url" type="text" placeholder="http://localhost:8087" />
+          </div>
+
+          <div class="field">
+            <label for="setting-default-path">Standardpfad</label>
+            <input id="setting-default-path" type="text" placeholder="Pfad wählen oder eintragen" />
+            <button type="button" id="setting-use-selected" class="secondary">
+              Aus Auswahl übernehmen
+            </button>
+          </div>
+
+          <div class="field">
+            <label for="setting-default-name">Standardname</label>
+            <input id="setting-default-name" type="text" placeholder="easyeda2kicad" />
+          </div>
+
+          <label class="checkbox">
+            <input type="checkbox" id="setting-notifications" checked />
+            <span>Benachrichtigungen anzeigen</span>
+          </label>
+
+          <label class="checkbox">
+            <input type="checkbox" id="setting-overwrite-footprints" />
+            <span>Footprints überschreiben (Quick Download)</span>
+          </label>
+
+          <label class="checkbox">
+            <input type="checkbox" id="setting-overwrite-models" />
+            <span>3D-Modelle überschreiben (Quick Download)</span>
+          </label>
+
+          <label class="checkbox">
+            <input type="checkbox" id="setting-debug-logs" />
+            <span>Debug-Logs in der Konsole anzeigen</span>
+          </label>
+
+          <div class="settings-actions">
+            <button type="button" id="settings-save" class="primary">Einstellungen speichern</button>
+            <span id="settings-feedback" class="success-message"></span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
