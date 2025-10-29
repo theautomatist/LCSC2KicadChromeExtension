@@ -1,6 +1,7 @@
 # Global imports
 import json
 import logging
+from typing import Optional, Tuple
 
 from easyeda2kicad.easyeda.easyeda_api import EasyedaApi
 from easyeda2kicad.easyeda.parameters_easyeda import *
@@ -10,9 +11,19 @@ def add_easyeda_pin(pin_data: str, ee_symbol: EeSymbol):
     segments = pin_data.split("^^")
     ee_segments = [seg.split("~") for seg in segments]
 
+    correct_pin_number = None
+    if len(ee_segments) > 4 and len(ee_segments[4]) > 4:
+        correct_pin_number = ee_segments[4][4]
+
     pin_settings = EeSymbolPinSettings(
         **dict(zip(EeSymbolPinSettings.__fields__, ee_segments[0][1:]))
     )
+    if correct_pin_number:
+        pin_settings.spice_pin_number = correct_pin_number
+    else:
+        logging.warning(
+            f"Could not determine pin number for pin data; using spice_pin_number {pin_settings.spice_pin_number}"
+        )
     pin_dot = EeSymbolPinDot(
         dot_x=float(ee_segments[1][0]), dot_y=float(ee_segments[1][1])
     )
@@ -123,8 +134,8 @@ class EasyedaSymbolImporter:
                 prefix=ee_data_info["pre"],
                 package=ee_data_info.get("package", None),
                 manufacturer=ee_data_info.get("BOM_Manufacturer", None),
-                datasheet=ee_data["lcsc"].get("url", None),
-                lcsc_id=ee_data["lcsc"].get("number", None),
+                datasheet=ee_data.get("lcsc", {}).get("url", None),
+                lcsc_id=ee_data.get("lcsc", {}).get("number", None),
                 jlc_id=ee_data_info.get("BOM_JLCPCB Part Class", None),
             ),
             bbox=EeSymbolBbox(
@@ -218,7 +229,7 @@ class EasyedaFootprintImporter:
                 new_ee_footprint.texts.append(ee_text)
             elif ee_designator == "SVGNODE":
                 new_ee_footprint.model_3d = Easyeda3dModelImporter(
-                    easyeda_cp_cad_data=[line], download_raw_3d_model=False
+                    easyeda_cp_cad_data=[line], download_raw_3d_model=True
                 ).output
 
             elif ee_designator == "SOLIDREGION":
@@ -250,6 +261,10 @@ class Easyeda3dModelImporter:
             if self.download_raw_3d_model:
                 model_3d.raw_obj = EasyedaApi().get_raw_3d_model_obj(uuid=model_3d.uuid)
                 model_3d.step = EasyedaApi().get_step_3d_model(uuid=model_3d.uuid)
+                metrics = compute_obj_center(model_3d.raw_obj)
+                if metrics is not None:
+                    model_3d.center = metrics[:3]
+                    model_3d.size = metrics[3:]
             return model_3d
 
         logging.warning("No 3D model available for this component")
@@ -276,3 +291,56 @@ class Easyeda3dModelImporter:
                 **dict(zip(Ee3dModelBase.__fields__, info["c_rotation"].split(",")))
             ),
         )
+
+
+def compute_obj_center(raw_obj: Optional[str]) -> Optional[
+    Tuple[float, float, float, float, float, float]
+]:
+    if not raw_obj:
+        return None
+
+    min_x = float("inf")
+    max_x = float("-inf")
+    min_y = float("inf")
+    max_y = float("-inf")
+    min_z = float("inf")
+    max_z = float("-inf")
+
+    for line in raw_obj.splitlines():
+        if not line.startswith("v "):
+            continue
+        parts = line.strip().split()
+        if len(parts) != 4:
+            continue
+        try:
+            x, y, z = (
+                float(parts[1]) / 2.54,
+                float(parts[2]) / 2.54,
+                float(parts[3]) / 2.54,
+            )
+        except ValueError:
+            continue
+        if x < min_x:
+            min_x = x
+        if x > max_x:
+            max_x = x
+        if y < min_y:
+            min_y = y
+        if y > max_y:
+            max_y = y
+        if z < min_z:
+            min_z = z
+        if z > max_z:
+            max_z = z
+
+    if min_x == float("inf") or min_y == float("inf") or min_z == float("inf"):
+        return None
+
+    return (
+        (min_x + max_x) / 2,
+        (min_y + max_y) / 2,
+        (min_z + max_z) / 2,
+        max_x - min_x,
+        max_y - min_y,
+        max_z - min_z,
+    )

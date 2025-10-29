@@ -17,6 +17,7 @@ from easyeda2kicad.easyeda.easyeda_importer import (
 from easyeda2kicad.easyeda.parameters_easyeda import EeSymbol
 from easyeda2kicad.helpers import (
     add_component_in_symbol_lib_file,
+    add_sub_components_in_symbol_lib_file,
     get_local_config,
     id_already_in_symbol_lib,
     set_logger,
@@ -25,7 +26,22 @@ from easyeda2kicad.helpers import (
 from easyeda2kicad.kicad.export_kicad_3d_model import Exporter3dModelKicad
 from easyeda2kicad.kicad.export_kicad_footprint import ExporterFootprintKicad
 from easyeda2kicad.kicad.export_kicad_symbol import ExporterSymbolKicad
-from easyeda2kicad.kicad.parameters_kicad_symbol import KicadVersion
+from easyeda2kicad.kicad.parameters_kicad_symbol import KicadVersion, sanitize_fields
+
+
+def symbol_is_empty(symbol: EeSymbol) -> bool:
+    return not any(
+        [
+            symbol.pins,
+            symbol.rectangles,
+            symbol.circles,
+            symbol.arcs,
+            symbol.ellipses,
+            symbol.polylines,
+            symbol.polygons,
+            symbol.paths,
+        ]
+    )
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -258,11 +274,26 @@ def main(argv: List[str] = sys.argv[1:]) -> int:
     if arguments["symbol"]:
         importer = EasyedaSymbolImporter(easyeda_cp_cad_data=cad_data)
         easyeda_symbol: EeSymbol = importer.get_symbol()
-        # print(easyeda_symbol)
 
+        subparts_data = cad_data.get("subparts") or []
+        easyeda_sub_symbols: List[EeSymbol] = []
+        if subparts_data:
+            subparts_iterable = subparts_data
+            if symbol_is_empty(easyeda_symbol):
+                primary_subpart = subparts_iterable[0]
+                primary_importer = EasyedaSymbolImporter(
+                    easyeda_cp_cad_data=primary_subpart
+                )
+                easyeda_symbol = primary_importer.get_symbol()
+                subparts_iterable = subparts_iterable[1:]
+            for subpart_data in subparts_iterable:
+                sub_importer = EasyedaSymbolImporter(easyeda_cp_cad_data=subpart_data)
+                easyeda_sub_symbols.append(sub_importer.get_symbol())
+
+        sanitized_component_name = sanitize_fields(easyeda_symbol.info.name)
         is_id_already_in_symbol_lib = id_already_in_symbol_lib(
             lib_path=f"{arguments['output']}.{sym_lib_ext}",
-            component_name=easyeda_symbol.info.name,
+            component_name=sanitized_component_name,
             kicad_version=kicad_version,
         )
 
@@ -278,10 +309,21 @@ def main(argv: List[str] = sys.argv[1:]) -> int:
             footprint_lib_name=arguments["output"].split("/")[-1].split(".")[0],
         )
 
+        kicad_sub_symbols_lib: List[str] = []
+        for sub_symbol in easyeda_sub_symbols:
+            sub_exporter = ExporterSymbolKicad(
+                symbol=sub_symbol, kicad_version=kicad_version
+            )
+            exported_content = sub_exporter.export(
+                footprint_lib_name=arguments["output"].split("/")[-1].split(".")[0]
+            )
+            if exported_content and exported_content != kicad_symbol_lib:
+                kicad_sub_symbols_lib.append(exported_content)
+
         if is_id_already_in_symbol_lib:
             update_component_in_symbol_lib_file(
                 lib_path=f"{arguments['output']}.{sym_lib_ext}",
-                component_name=easyeda_symbol.info.name,
+                component_name=sanitized_component_name,
                 component_content=kicad_symbol_lib,
                 kicad_version=kicad_version,
             )
@@ -291,6 +333,18 @@ def main(argv: List[str] = sys.argv[1:]) -> int:
                 component_content=kicad_symbol_lib,
                 kicad_version=kicad_version,
             )
+        if kicad_sub_symbols_lib and kicad_version == KicadVersion.v6:
+            add_sub_components_in_symbol_lib_file(
+                lib_path=f"{arguments['output']}.{sym_lib_ext}",
+                component_name=sanitized_component_name,
+                sub_components_content=kicad_sub_symbols_lib,
+                kicad_version=kicad_version,
+            )
+        elif kicad_sub_symbols_lib:
+            logging.warning(
+                "Multi-unit symbols are only supported for KiCad v6 libraries; "
+                "skipping additional units."
+            )
 
         logging.info(
             f"Created Kicad symbol for ID : {component_id}\n"
@@ -299,6 +353,8 @@ def main(argv: List[str] = sys.argv[1:]) -> int:
         )
 
     # ---------------- FOOTPRINT ----------------
+    easyeda_footprint = None
+
     if arguments["footprint"]:
         importer = EasyedaFootprintImporter(easyeda_cp_cad_data=cad_data)
         easyeda_footprint = importer.get_footprint()
@@ -336,20 +392,28 @@ def main(argv: List[str] = sys.argv[1:]) -> int:
 
     # ---------------- 3D MODEL ----------------
     if arguments["3d"]:
-        exporter = Exporter3dModelKicad(
-            model_3d=Easyeda3dModelImporter(
+        model_3d_data = None
+        if easyeda_footprint and easyeda_footprint.model_3d:
+            model_3d_data = easyeda_footprint.model_3d
+        if model_3d_data is None:
+            model_3d_data = Easyeda3dModelImporter(
                 easyeda_cp_cad_data=cad_data, download_raw_3d_model=True
             ).output
-        )
+
+        exporter = Exporter3dModelKicad(model_3d=model_3d_data)
         exporter.export(lib_path=arguments["output"])
         if exporter.output or exporter.output_step:
-            filename_wrl = f"{exporter.output.name}.wrl"
-            filename_step = f"{exporter.output.name}.step"
+            model_base_name = os.path.splitext(exporter.input.name or "")[0] if exporter.input else ""
+            if not model_base_name:
+                model_base_name = "easyeda_model"
+            model_base_name = model_base_name.replace("\\", "_").replace("/", "_")
+            filename_wrl = f"{model_base_name}.wrl"
+            filename_step = f"{model_base_name}.step"
             lib_path = f"{arguments['output']}.3dshapes"
 
             logging.info(
                 f"Created 3D model for ID: {component_id}\n"
-                f"       3D model name: {exporter.output.name}\n"
+                f"       3D model name: {model_base_name}\n"
                 + (
                     "       3D model path (wrl):"
                     f" {os.path.join(lib_path, filename_wrl)}\n"

@@ -1,7 +1,7 @@
 # Global imports
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Union
+from typing import List, Optional, Tuple, Union
 
 from pydantic import BaseModel, field_validator
 
@@ -443,10 +443,10 @@ class EeFootprintRectangle(BaseModel):
     y: float
     width: float
     height: float
-    stroke_width: float
-    id: str
     layer_id: int
+    id: str
     is_locked: bool
+    stroke_width: float
 
     @field_validator("is_locked", mode="before")
     @classmethod
@@ -458,6 +458,7 @@ class EeFootprintRectangle(BaseModel):
         self.y = convert_to_mm(self.y)
         self.width = convert_to_mm(self.width)
         self.height = convert_to_mm(self.height)
+        self.stroke_width = convert_to_mm(self.stroke_width)
 
 
 class EeFootprintArc(BaseModel):
@@ -544,6 +545,8 @@ class Ee3dModel:
     rotation: Ee3dModelBase
     raw_obj: str = None
     step: bytes = None
+    center: Optional[Tuple[float, float, float]] = None
+    size: Optional[Tuple[float, float, float]] = None
 
     def convert_to_mm(self) -> None:
         self.translation.convert_to_mm()

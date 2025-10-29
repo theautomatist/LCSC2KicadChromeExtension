@@ -27,6 +27,7 @@ KI_FAB_REF = (
     " (thickness 0.15)))\n\t)\n"
 )
 KI_END_FILE = ")"
+KI_PAD_SIZE_MIN = 0.001
 
 KI_PAD = (
     "\t(pad {number} {type} {shape} (at {pos_x:.2f} {pos_y:.2f} {orientation:.2f})"

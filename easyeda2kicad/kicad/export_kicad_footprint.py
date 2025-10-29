@@ -1,7 +1,8 @@
 # Global imports
 import logging
+import os
 from math import acos, cos, isnan, pi, sin, sqrt
-from typing import Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 from easyeda2kicad.easyeda.parameters_easyeda import ee_footprint
 from easyeda2kicad.kicad.parameters_kicad_footprint import *
@@ -94,7 +95,8 @@ def compute_arc(
     p = ux * vx + uy * vy
     sign = -1 if (ux * vy - uy * vx) < 0 else 1
     if n != 0:
-        angle_extent = to_degrees(sign * acos(p / n)) if abs(p / n) < 1 else 360 + 359
+        clamped_ratio = max(-1, min(1, p / n))
+        angle_extent = to_degrees(sign * acos(clamped_ratio))
     else:
         angle_extent = 360 + 359
     if not (sweep_flag) and angle_extent > 0:
@@ -165,6 +167,210 @@ def rotate(x: float, y: float, degrees: float) -> Tuple[float, float]:
 # ---------------------------------------
 
 
+def is_on_segment(
+    x0: float, y0: float, x1: float, y1: float, px: float, py: float
+) -> bool:
+    epsilon = 1e-9
+    return (
+        min(x0, x1) <= px <= max(x0, x1)
+        and min(y0, y1) <= py <= max(y0, y1)
+        and abs((px - x0) * (y1 - y0) - (py - y0) * (x1 - x0)) < epsilon
+    )
+
+
+def is_left(x0: float, y0: float, x1: float, y1: float, px: float, py: float) -> bool:
+    return ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) > 0
+
+
+def is_point_in_polygon(
+    point: Tuple[float, float], polygon: List[Tuple[float, float]]
+) -> bool:
+    x, y = point
+    winding_number = 0
+    n = len(polygon)
+
+    for i in range(n):
+        x0, y0 = polygon[i]
+        x1, y1 = polygon[(i + 1) % n]
+
+        if is_on_segment(x0, y0, x1, y1, x, y):
+            return True
+
+        if y0 <= y < y1 and is_left(x0, y0, x1, y1, x, y):
+            winding_number += 1
+        elif y1 <= y < y0 and not is_left(x0, y0, x1, y1, x, y):
+            winding_number -= 1
+
+    return winding_number != 0
+
+
+def get_circumscribed_regular_polygon(
+    center: Tuple[float, float], radius: float, n: int
+) -> List[Tuple[float, float]]:
+    cx, cy = center
+    return [
+        (cx + radius * cos(2 * pi * i / n), cy + radius * sin(2 * pi * i / n))
+        for i in range(n)
+    ]
+
+
+def is_circle_in_polygon(
+    center: Tuple[float, float], radius: float, polygon: List[Tuple[float, float]]
+) -> bool:
+    return all(
+        is_point_in_polygon(vertex, polygon)
+        for vertex in get_circumscribed_regular_polygon(center, radius, 12)
+    )
+
+
+def get_bounds_of_polygon(
+    polygon: List[Tuple[float, float]],
+) -> Tuple[float, float, float, float]:
+    min_x = min(polygon, key=lambda vertex: vertex[0])[0]
+    max_x = max(polygon, key=lambda vertex: vertex[0])[0]
+    min_y = min(polygon, key=lambda vertex: vertex[1])[1]
+    max_y = max(polygon, key=lambda vertex: vertex[1])[1]
+    return min_x, max_x, min_y, max_y
+
+
+def frange(start: float, stop: float, step: float):
+    count = int((stop - start) / step) + 1
+    for i in range(count):
+        yield start + step * i
+
+
+def find_circle_center_in_polygon(
+    polygon: List[Tuple[float, float]], radius: float
+) -> Optional[Tuple[float, float]]:
+    min_x, max_x, min_y, max_y = get_bounds_of_polygon(polygon)
+    step = 0.05
+
+    for x in frange(min_x, max_x, step):
+        for y in frange(min_y, max_y, step):
+            center = (x, y)
+            if is_circle_in_polygon(center, radius, polygon):
+                return center
+    return None
+
+
+def set_appropriate_position_for_custom_shape(
+    ki_pad: KiFootprintPad, polygon: List[Tuple[float, float]]
+) -> None:
+    center = (ki_pad.pos_x, ki_pad.pos_y)
+    radius = ki_pad.width / 2
+
+    if is_circle_in_polygon(center, radius, polygon):
+        return
+
+    new_center = find_circle_center_in_polygon(polygon, radius)
+    if new_center is None:
+        logging.warning(
+            f"The custom shape of PAD #${ki_pad.number} cannot contain its anchor pad"
+        )
+        return
+
+    ki_pad.pos_x, ki_pad.pos_y = new_center
+
+
+# ---------------------------------------
+
+
+def sanitize_model_filename(name: str) -> str:
+    base = os.path.splitext(name or "")[0]
+    if not base:
+        base = "easyeda_model"
+    return base.replace("\\", "_").replace("/", "_")
+
+
+def compute_geometry_center(footprint: ee_footprint) -> Tuple[float, float]:
+    min_x = float("inf")
+    max_x = float("-inf")
+    min_y = float("inf")
+    max_y = float("-inf")
+
+    def update_bounds(x: float, y: float) -> None:
+        nonlocal min_x, max_x, min_y, max_y
+        if x < min_x:
+            min_x = x
+        if x > max_x:
+            max_x = x
+        if y < min_y:
+            min_y = y
+        if y > max_y:
+            max_y = y
+
+    def update_box(x1: float, y1: float, x2: float, y2: float) -> None:
+        update_bounds(x1, y1)
+        update_bounds(x2, y2)
+
+    for pad in footprint.pads:
+        half_w = pad.width / 2
+        half_h = pad.height / 2
+        update_box(
+            pad.center_x - half_w,
+            pad.center_y - half_h,
+            pad.center_x + half_w,
+            pad.center_y + half_h,
+        )
+
+    for track in footprint.tracks:
+        if not track.points:
+            continue
+        points = [fp_to_ki(point) for point in track.points.split(" ") if point != ""]
+        for idx in range(0, len(points), 2):
+            try:
+                update_bounds(points[idx], points[idx + 1])
+            except IndexError:
+                break
+
+    for circle in footprint.circles:
+        update_box(
+            circle.cx - circle.radius,
+            circle.cy - circle.radius,
+            circle.cx + circle.radius,
+            circle.cy + circle.radius,
+        )
+
+    for rectangle in footprint.rectangles:
+        update_box(
+            rectangle.x,
+            rectangle.y,
+            rectangle.x + rectangle.width,
+            rectangle.y + rectangle.height,
+        )
+
+    for hole in footprint.holes:
+        update_box(
+            hole.center_x - hole.radius,
+            hole.center_y - hole.radius,
+            hole.center_x + hole.radius,
+            hole.center_y + hole.radius,
+        )
+
+    for via in footprint.vias:
+        update_box(
+            via.center_x - via.radius,
+            via.center_y - via.radius,
+            via.center_x + via.radius,
+            via.center_y + via.radius,
+        )
+
+    if min_x == float("inf") or min_y == float("inf"):
+        min_x = footprint.bbox.x
+        max_x = footprint.bbox.x
+        min_y = footprint.bbox.y
+        max_y = footprint.bbox.y
+
+    return (
+        (min_x + max_x) / 2,
+        (min_y + max_y) / 2,
+        min_x,
+        max_x,
+        min_y,
+        max_y,
+    )
+
+
 class ExporterFootprintKicad:
     def __init__(self, footprint: ee_footprint):
         self.input = footprint
@@ -195,19 +401,60 @@ class ExporterFootprintKicad:
 
         if self.input.model_3d is not None:
             self.input.model_3d.convert_to_mm()
+            (
+                footprint_center_x,
+                footprint_center_y,
+                footprint_min_x,
+                footprint_max_x,
+                footprint_min_y,
+                footprint_max_y,
+            ) = compute_geometry_center(self.input)
+            footprint_origin_x = self.input.bbox.x
+            footprint_origin_y = self.input.bbox.y
 
-            # if self.input.model_3d.translation.z != 0:
-            #     self.input.model_3d.translation.z -= 1
+            local_center_x = footprint_center_x - footprint_origin_x
+            local_center_y = footprint_center_y - footprint_origin_y
+            footprint_width = footprint_max_x - footprint_min_x
+            footprint_height = footprint_max_y - footprint_min_y
+
+            model_translation_z = 0.0
+            if (
+                self.input.model_3d.center is not None
+                and self.input.model_3d.size is not None
+                and len(self.input.model_3d.center) == 3
+                and len(self.input.model_3d.size) == 3
+                and all(axis != 0 for axis in self.input.model_3d.size[:2])
+                and self.input.model_3d.size[2] != 0
+            ):
+                model_center_x, model_center_y, model_center_z = self.input.model_3d.center
+                model_size_x, model_size_y, model_size_z = self.input.model_3d.size
+                scale_x = footprint_width / model_size_x if model_size_x else 1.0
+                scale_y = footprint_height / model_size_y if model_size_y else 1.0
+                model_translation_x = round(local_center_x - model_center_x * scale_x, 2)
+                model_translation_y = -round(local_center_y - model_center_y * scale_y, 2)
+                model_bottom_z = model_center_z - (model_size_z / 2)
+                model_translation_z = -round(model_bottom_z, 2)
+            else:
+                api_translation_x = self.input.model_3d.translation.x
+                api_translation_y = self.input.model_3d.translation.y
+                model_translation_x = round(
+                    api_translation_x - footprint_origin_x, 2
+                )
+                model_translation_y = -round(
+                    api_translation_y - footprint_origin_y, 2
+                )
+                model_translation_z = (
+                    -round(self.input.model_3d.translation.z, 2)
+                    if self.input.info.fp_type == "smd"
+                    else 0
+                )
+
             ki_3d_model_info = Ki3dModel(
                 name=self.input.model_3d.name,
                 translation=Ki3dModelBase(
-                    x=round((self.input.model_3d.translation.x - self.input.bbox.x), 2),
-                    y=-round(
-                        (self.input.model_3d.translation.y - self.input.bbox.y), 2
-                    ),
-                    z=-round(self.input.model_3d.translation.z, 2)
-                    if self.input.info.fp_type == "smd"
-                    else 0,
+                    x=model_translation_x,
+                    y=model_translation_y,
+                    z=model_translation_z,
                 ),
                 rotation=Ki3dModelBase(
                     x=(360 - self.input.model_3d.rotation.x) % 360,
@@ -216,7 +463,6 @@ class ExporterFootprintKicad:
                 ),
                 raw_wrl=None,
             )
-            # print(ki_3d_model_info)
         else:
             ki_3d_model_info = None
 
@@ -226,9 +472,11 @@ class ExporterFootprintKicad:
         for ee_pad in self.input.pads:
             ki_pad = KiFootprintPad(
                 type="thru_hole" if ee_pad.hole_radius > 0 else "smd",
-                shape=KI_PAD_SHAPE[ee_pad.shape]
-                if ee_pad.shape in KI_PAD_SHAPE
-                else "custom",
+                shape=(
+                    KI_PAD_SHAPE[ee_pad.shape]
+                    if ee_pad.shape in KI_PAD_SHAPE
+                    else "custom"
+                ),
                 pos_x=ee_pad.center_x - self.input.bbox.x,
                 pos_y=ee_pad.center_y - self.input.bbox.y,
                 width=max(ee_pad.width, 0.01),
@@ -257,28 +505,31 @@ class ExporterFootprintKicad:
                         f"PAD ${ee_pad.id} is a polygon, but has no points defined"
                     )
                 else:
-                    # Set the pad width and height to the smallest value allowed by KiCad.
-                    # KiCad tries to draw a pad that forms the base of the polygon,
-                    # but this is often unnecessary and should be disabled.
-                    ki_pad.width = 0.005
-                    ki_pad.height = 0.005
-
-                    # The points of the polygon always seem to correspond to coordinates when orientation=0.
+                    ki_pad.width = KI_PAD_SIZE_MIN
+                    ki_pad.height = KI_PAD_SIZE_MIN
                     ki_pad.orientation = 0
 
-                    # Generate polygon with coordinates relative to the base pad's position.
-                    path = "".join(
-                        "(xy {} {})".format(
-                            round(point_list[i] - self.input.bbox.x - ki_pad.pos_x, 2),
-                            round(
-                                point_list[i + 1] - self.input.bbox.y - ki_pad.pos_y, 2
-                            ),
+                    absolute_coords = [
+                        (
+                            point_list[i] - self.input.bbox.x,
+                            point_list[i + 1] - self.input.bbox.y,
                         )
                         for i in range(0, len(point_list), 2)
+                    ]
+                    set_appropriate_position_for_custom_shape(
+                        ki_pad=ki_pad, polygon=absolute_coords
+                    )
+
+                    relative_coords = [
+                        (x - ki_pad.pos_x, y - ki_pad.pos_y)
+                        for (x, y) in absolute_coords
+                    ]
+                    path = "".join(
+                        f"(xy {round(x, 2)} {round(y, 2)})" for x, y in relative_coords
                     )
                     ki_pad.polygon = (
                         "\n\t\t(primitives \n\t\t\t(gr_poly \n\t\t\t\t(pts"
-                        f" {path}\n\t\t\t\t) \n\t\t\t\t(width 0.1) \n\t\t\t)\n\t\t)\n\t"
+                        f" {path}\n\t\t\t\t) \n\t\t\t\t(width 0) \n\t\t\t)\n\t\t)\n\t"
                     )
 
             self.output.pads.append(ki_pad)
@@ -286,9 +537,11 @@ class ExporterFootprintKicad:
         # For tracks
         for ee_track in self.input.tracks:
             ki_track = KiFootprintTrack(
-                layers=KI_PAD_LAYER[ee_track.layer_id]
-                if ee_track.layer_id in KI_PAD_LAYER
-                else "F.Fab",
+                layers=(
+                    KI_PAD_LAYER[ee_track.layer_id]
+                    if ee_track.layer_id in KI_PAD_LAYER
+                    else "F.Fab"
+                ),
                 stroke_width=max(ee_track.stroke_width, 0.01),
             )
 
@@ -338,9 +591,11 @@ class ExporterFootprintKicad:
                 cy=ee_circle.cy - self.input.bbox.y,
                 end_x=0.0,
                 end_y=0.0,
-                layers=KI_LAYERS[ee_circle.layer_id]
-                if ee_circle.layer_id in KI_LAYERS
-                else "F.Fab",
+                layers=(
+                    KI_LAYERS[ee_circle.layer_id]
+                    if ee_circle.layer_id in KI_LAYERS
+                    else "F.Fab"
+                ),
                 stroke_width=max(ee_circle.stroke_width, 0.01),
             )
             ki_circle.end_x = ki_circle.cx + ee_circle.radius
@@ -350,9 +605,11 @@ class ExporterFootprintKicad:
         # For rectangles
         for ee_rectangle in self.input.rectangles:
             ki_rectangle = KiFootprintRectangle(
-                layers=KI_PAD_LAYER[ee_rectangle.layer_id]
-                if ee_rectangle.layer_id in KI_PAD_LAYER
-                else "F.Fab",
+                layers=(
+                    KI_PAD_LAYER[ee_rectangle.layer_id]
+                    if ee_rectangle.layer_id in KI_PAD_LAYER
+                    else "F.Fab"
+                ),
                 stroke_width=max(ee_rectangle.stroke_width, 0.01),
             )
 
@@ -367,7 +624,12 @@ class ExporterFootprintKicad:
                 start_x + width,
                 start_x,
             ]
-            ki_rectangle.points_start_y = [start_y, start_y, start_y + height, start_y]
+            ki_rectangle.points_start_y = [
+                start_y,
+                start_y,
+                start_y + height,
+                start_y + height,
+            ]
             ki_rectangle.points_end_x = [
                 start_x + width,
                 start_x + width,
@@ -430,9 +692,11 @@ class ExporterFootprintKicad:
                 end_x=end_x,
                 end_y=end_y,
                 angle=extent,
-                layers=KI_LAYERS[ee_arc.layer_id]
-                if ee_arc.layer_id in KI_LAYERS
-                else "F.Fab",
+                layers=(
+                    KI_LAYERS[ee_arc.layer_id]
+                    if ee_arc.layer_id in KI_LAYERS
+                    else "F.Fab"
+                ),
                 stroke_width=max(fp_to_ki(ee_arc.stroke_width), 0.01),
             )
             self.output.arcs.append(ki_arc)
@@ -444,9 +708,11 @@ class ExporterFootprintKicad:
                 pos_y=ee_text.center_y - self.input.bbox.y,
                 orientation=angle_to_ki(ee_text.rotation),
                 text=ee_text.text,
-                layers=KI_LAYERS[ee_text.layer_id]
-                if ee_text.layer_id in KI_LAYERS
-                else "F.Fab",
+                layers=(
+                    KI_LAYERS[ee_text.layer_id]
+                    if ee_text.layer_id in KI_LAYERS
+                    else "F.Fab"
+                ),
                 font_size=max(ee_text.font_size, 1),
                 thickness=max(ee_text.stroke_width, 0.01),
                 display=" hide" if ee_text.is_displayed is False else "",
@@ -519,8 +785,9 @@ class ExporterFootprintKicad:
             ki_lib += KI_TEXT.format(**vars(text))
 
         if ki.model_3d is not None:
+            model_base_name = sanitize_model_filename(ki.model_3d.name)
             ki_lib += KI_MODEL_3D.format(
-                file_3d=f"{model_3d_path}/{ki.model_3d.name}.wrl",
+                file_3d=f"..{model_3d_path}/{model_base_name}.wrl",
                 pos_x=ki.model_3d.translation.x,
                 pos_y=ki.model_3d.translation.y,
                 pos_z=ki.model_3d.translation.z,

@@ -105,3 +105,9 @@ easyeda2kicad --symbol --footprint --lcsc_id=C2040
 ## 🔥 Important Notes
 ### WARRANTY
 The correctness of the symbols and footprints converted by easyeda2kicad can't be guaranteed. Easyeda2kicad speeds up custom library design process, but you should remain careful and always double check the footprints and symbols generated.
+
+### Recent Fixes
+- Symbol pins now retain their EasyEDA-assigned numbers, preventing mismatches when importing multi-pin components.
+- Custom footprint polygons keep their reference pad inside the shape and honour EasyEDA stroke widths for rectangles.
+- Arc conversions clamp rounding issues to avoid invalid geometry, and symbol libraries stay well-formed when appending entries repeatedly.
+- Multi-unit symbols from EasyEDA subparts are now merged into a single KiCad part, keeping each unit accessible in v6 libraries.
