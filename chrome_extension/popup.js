@@ -39,7 +39,7 @@ function createSimpleBootstrap(scope) {
       this.visible = true;
       activeModalCount += 1;
       doc.body.classList.add("modal-open");
-      this._createBackdrop();
+	  doc.body.style.minHeight = "536px";
       this.element.style.display = "block";
       this.element.removeAttribute("aria-hidden");
       this.element.classList.add("show");
@@ -53,29 +53,15 @@ function createSimpleBootstrap(scope) {
       activeModalCount = Math.max(0, activeModalCount - 1);
       if (activeModalCount === 0) {
         doc.body.classList.remove("modal-open");
+	  	doc.body.style.minHeight = null;
       }
       this.element.classList.remove("show");
       this.element.setAttribute("aria-hidden", "true");
       this.element.style.display = "none";
       doc.removeEventListener("keydown", this._handleKeydown);
-      this._removeBackdrop();
       this.element.dispatchEvent(new CustomEvent("hidden.bs.modal", { bubbles: true }));
     }
 
-    _createBackdrop() {
-      if (this.backdrop) return;
-      const backdrop = doc.createElement("div");
-      backdrop.className = "modal-backdrop fade show";
-      doc.body.appendChild(backdrop);
-      this.backdrop = backdrop;
-    }
-
-    _removeBackdrop() {
-      if (this.backdrop && this.backdrop.parentNode) {
-        this.backdrop.parentNode.removeChild(this.backdrop);
-      }
-      this.backdrop = null;
-    }
   }
 
   class SimpleToast {
@@ -214,6 +200,7 @@ function cacheElements() {
     return acc;
   }, {});
   elements.connectionStatus = document.getElementById("connection-status");
+  elements.connectionStatusDot = document.getElementById("connection-status-dot");
   elements.headerActive = document.getElementById("header-active");
   elements.toastContainer = document.getElementById("toast-container");
 
@@ -241,7 +228,7 @@ function cacheElements() {
   elements.libraryModalSubmit = document.getElementById("library-modal-submit");
   elements.libraryModalError = document.getElementById("library-modal-error");
   elements.libraryImportForm = document.getElementById("library-import-form");
-  elements.libraryImportPath = document.getElementById("library-import-path");
+  elements.libraryImportPath;
   elements.libraryImportInfo = document.getElementById("library-import-info");
   elements.librarySummary = document.getElementById("library-summary");
   elements.librarySearch = document.getElementById("library-search");
@@ -266,6 +253,7 @@ function cacheElements() {
   // Modals shared
   elements.libraryRequiredModal = document.getElementById("library-required-modal");
   elements.pickerModal = document.getElementById("picker-modal");
+  elements.pickerModalTitle = document.getElementById("picker-modal-title");
   elements.pickerManual = document.getElementById("picker-manual");
   elements.pickerPathBreadcrumb = document.getElementById("picker-path-breadcrumb");
   elements.pickerList = document.getElementById("picker-list");
@@ -315,11 +303,11 @@ function bindEvents() {
       openDirectoryPicker({
         mode,
         applyLabel: mode === "import" ? "Import library" : "Use this folder",
-        initialPath: mode === "import" ? elements.libraryImportPath.value : elements.libraryCreatePath.value,
+        initialPath: mode === "import" ? elements.libraryImportPath : elements.libraryCreatePath.value,
         onSelect: (selectedPath) => {
           if (mode === "import") {
-            elements.libraryImportPath.value = selectedPath;
-            validateImportPath(selectedPath);
+            elements.libraryImportPath = selectedPath;
+			submitImportLibrary();
           } else {
             elements.libraryCreatePath.value = selectedPath;
           }
@@ -342,7 +330,7 @@ function bindEvents() {
     const tab = new bootstrap.Tab(trigger);
     tab.show();
   });
-  elements.libraryModalSubmit?.addEventListener("click", handleLibraryModalSubmit);
+  elements.libraryModalSubmit?.addEventListener("click", submitCreateLibrary);
 
   elements.libraryList?.addEventListener("change", handleLibraryListChange);
   elements.libraryList?.addEventListener("click", handleLibraryListClick);
@@ -463,10 +451,8 @@ function applyState(snapshot = {}) {
 
 function renderConnectionStatus() {
   if (!elements.connectionStatus) return;
-  const label = state.connected ? "ON" : "OFF";
-  elements.connectionStatus.textContent = label;
-  elements.connectionStatus.classList.toggle("badge-online", state.connected);
-  elements.connectionStatus.classList.toggle("badge-offline", !state.connected);
+  elements.connectionStatusDot.classList.toggle("badge-online", state.connected);
+  elements.connectionStatusDot.classList.toggle("badge-offline", !state.connected);
 }
 
 function renderPartsDefaults() {
@@ -568,58 +554,25 @@ function renderLibraries() {
 
   libraries.forEach((library) => {
     const item = document.createElement("div");
-    item.className = "list-group-item library-entry";
+    item.className = "library-entry";
+	if (library.active) item.className += " active";
     item.dataset.id = library.id;
 
     const info = document.createElement("div");
     info.className = "library-info";
 
     const titleRow = document.createElement("div");
-    titleRow.className = "d-flex align-items-center gap-2 mb-1";
+    titleRow.className = "d-flex align-items-center";
 
     const title = document.createElement("span");
-    title.className = "fw-semibold";
+    title.className = "fw-semibold fs-6";
     title.textContent = library.name || "Untitled library";
     titleRow.appendChild(title);
 
-    if (library.active) {
-      const badge = document.createElement("span");
-      badge.className = "badge text-bg-success";
-      badge.textContent = "Active";
-      titleRow.appendChild(badge);
-    }
+	const actionWrapper = document.createElement("div");
+    actionWrapper.className = "flex-fill d-flex flex-row-reverse gap-2";
 
-    info.appendChild(titleRow);
-
-    const path = document.createElement("div");
-    path.className = "library-meta";
-    path.textContent = library.symbolPath || library.path || library.resolvedPrefix || "";
-    info.appendChild(path);
-
-    const assets = document.createElement("div");
-    assets.className = "library-assets mt-2";
-    assets.appendChild(renderAssetBadge("Symbol", library.assets?.symbol, library.counts?.symbol));
-    assets.appendChild(renderAssetBadge("Footprint", library.assets?.footprint, library.counts?.footprint));
-    assets.appendChild(renderAssetBadge("3D", library.assets?.model, library.counts?.model));
-    info.appendChild(assets);
-
-    const controls = document.createElement("div");
-    controls.className = "library-controls";
-
-    const switchWrapper = document.createElement("div");
-    switchWrapper.className = "form-check form-switch";
-    const toggle = document.createElement("input");
-    toggle.type = "checkbox";
-    toggle.className = "form-check-input library-toggle";
-    toggle.checked = Boolean(library.active);
-    toggle.dataset.id = library.id;
-    switchWrapper.appendChild(toggle);
-    controls.appendChild(switchWrapper);
-
-    const actions = document.createElement("div");
-    actions.className = "btn-group btn-group-sm";
-
-    const removeBtn = document.createElement("button");
+	const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "btn btn-outline-danger library-remove";
     removeBtn.setAttribute("aria-label", `Remove library ${library.name || ""}`.trim());
@@ -629,11 +582,35 @@ function renderLibraries() {
       </svg>
     `;
     removeBtn.dataset.id = library.id;
-    actions.appendChild(removeBtn);
+    actionWrapper.appendChild(removeBtn);
 
-    controls.appendChild(actions);
+    const toggle = document.createElement("input");
+    toggle.type = "button";
+    toggle.className = "library-toggle";
+    toggle.disabled = Boolean(library.active);
+	toggle.value = library.active ? "Active" : "Activate";
+    toggle.dataset.id = library.id;
+	toggle.onclick = (event) => {
+		toggle.disabled = true;
+		handleLibraryListChange(event);
+	};
+    actionWrapper.appendChild(toggle);	
 
-    item.append(info, controls);
+    titleRow.appendChild(actionWrapper);
+    info.appendChild(titleRow);
+
+    const assets = document.createElement("div");
+    assets.className = "library-assets mb-2 mt-1";
+    assets.appendChild(renderAssetBadge("Symbol", library.assets?.symbol, library.counts?.symbol));
+    assets.appendChild(renderAssetBadge("Footprint", library.assets?.footprint, library.counts?.footprint));
+    assets.appendChild(renderAssetBadge("3D", library.assets?.model, library.counts?.model));
+    info.appendChild(assets);
+	
+    const path = document.createElement("div");
+    path.className = "library-meta";
+    path.textContent = library.symbolPath || library.path || library.resolvedPrefix || "";
+    info.appendChild(path);
+    item.append(info);
     elements.libraryList.appendChild(item);
   });
 }
@@ -736,14 +713,14 @@ function handlePartsSubmit(event) {
 
   const hasOutput = outputs.symbol || outputs.footprint || outputs.model;
   if (!lcscRaw || !lcscRaw.startsWith("C")) {
-    setPartsFeedback("Please provide a valid LCSC number (e.g. C8734).", "danger");
+	showToast("Please provide a valid LCSC number (e.g. C8734)", "danger");
     elements.partsLcsc.classList.add("is-invalid");
     return;
   }
   elements.partsLcsc.classList.remove("is-invalid");
 
   if (!hasOutput) {
-    setPartsFeedback("Select at least one output (symbol, footprint, or 3D).", "danger");
+	showToast("Select at least one output (symbol, footprint or 3D).", "danger");
     return;
   }
 
@@ -772,7 +749,6 @@ function handlePartsSubmit(event) {
   };
 
   elements.partsSubmit.disabled = true;
-  setPartsFeedback("Download started…", "info");
 
   sendMessage("submitJob", { payload })
     .then((summary) => {
@@ -818,14 +794,12 @@ function handleLibraryListChange(event) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement)) return;
   if (!input.classList.contains("library-toggle")) return;
-
   const id = input.dataset.id;
   if (!id) return;
-
   const library = state.libraries.find((item) => item.id === id);
   if (!library) return;
 
-  if (input.checked) {
+  if (input.disabled) {
     state.libraries = state.libraries.map((item) => ({
       ...item,
       active: item.id === id,
@@ -833,7 +807,7 @@ function handleLibraryListChange(event) {
   } else {
     const otherActive = state.libraries.some((item) => item.id !== id && item.active);
     if (!otherActive) {
-      input.checked = true;
+      input.disabled = true;
       showToast("At least one library must remain active.", "warning");
       return;
     }
@@ -866,13 +840,13 @@ function handleLibraryListClick(event) {
     syncSelectedLibrary();
     renderLibraries();
     persistLibraries();
-    showToast("Library removed", "info");
+    showToast("Library removed", "success");
   }
 }
 
 function submitImportLibrary() {
   clearLibraryModalError();
-  const path = elements.libraryImportPath.value.trim();
+  const path = elements.libraryImportPath.trim();
   if (!path) {
     setLibraryModalError("Please choose a file.");
     return;
@@ -991,8 +965,10 @@ function handleSettingsChange() {
 function testServerConnection() {
   setSettingsFeedback("Checking connection…", "text-muted");
   sendMessage("updateSettings", { serverUrl: elements.settingsServer.value.trim() })
-    .then(() => setSettingsFeedback("Server reachable", "text-success"))
-    .catch((error) => setSettingsFeedback(error.message || "Server not reachable", "text-danger"));
+    .then((status) => {
+		if(status.connected) setSettingsFeedback("Server reachable", "text-success");
+		else setSettingsFeedback("Server not reachable", "text-danger");
+	})
 }
 
 function clearPartsFeedback() {
@@ -1083,6 +1059,7 @@ function openDirectoryPicker({ mode, onSelect, applyLabel, initialPath }) {
   state.picker.filterExtension = mode === "import" ? ".kicad_sym" : null;
   state.picker.requireFile = mode === "import";
   state.picker.breadcrumbs = [];
+  elements.pickerModalTitle.innerHTML = mode === "import" ? "Select file" : "Select folder";
   elements.pickerManual.value = initialPath || "";
   elements.pickerError.textContent = "";
   elements.pickerApply.textContent = applyLabel || "Select";
@@ -1179,7 +1156,7 @@ function renderPickerPathBreadcrumb() {
     crumbs.forEach((crumb, index) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "btn btn-sm btn-outline-secondary";
+      button.className = "btn btn-sm btn-secondary";
       button.textContent = crumb?.label || crumb?.path || "";
       if (index === crumbs.length - 1) {
         button.disabled = true;
