@@ -124,7 +124,9 @@ async function ensureSelectedLibrary(force = false) {
   let nextName = "";
 
   if (Array.isArray(state.libraries) && state.libraries.length) {
-    const active = state.libraries.find((library) => library.active) || state.libraries[0];
+    const active = state.libraries.find((library) => library.active && !library.missing)
+      || state.libraries.find((library) => !library.missing)
+      || state.libraries[0];
     if (active) {
       nextPath = deriveLibraryPrefix(active);
       nextName = sanitizeLibraryName(active.name) || deriveLibraryNameFromPath(nextPath) || "";
@@ -149,6 +151,44 @@ function recalcLibraryTotals() {
   });
   state.libraryTotals = totals;
   return totals;
+}
+
+function buildLibraryStatus(library, validation) {
+  if (!validation) {
+    return library;
+  }
+
+  const exists = Boolean(validation.exists);
+  const counts = exists
+    ? {
+        symbol: Number(validation.counts?.symbol) || (validation.assets?.symbol ? 1 : 0),
+        footprint: Number(validation.counts?.footprint) || 0,
+        model: Number(validation.counts?.model) || 0,
+      }
+    : { symbol: 0, footprint: 0, model: 0 };
+  const assets = exists
+    ? {
+        symbol: Boolean(validation.assets?.symbol),
+        footprint: Boolean(validation.assets?.footprint),
+        model: Boolean(validation.assets?.model),
+      }
+    : { symbol: false, footprint: false, model: false };
+  const warnings = Array.isArray(validation.warnings) ? validation.warnings.slice() : [];
+  if (!exists) {
+    warnings.push("Library path missing on disk.");
+  }
+
+  return {
+    ...library,
+    symbolPath: normalizePath(validation.resolved_path || library.symbolPath || ""),
+    assets,
+    counts,
+    warnings,
+    missing: !exists,
+    active: exists ? library.active : false,
+    updatedAt: new Date().toISOString(),
+    lastValidation: new Date().toISOString(),
+  };
 }
 
 function hasModelOutput(result) {
@@ -291,6 +331,7 @@ function normalizeLibraryRecord(raw) {
     projectId: raw.projectId || "default",
     projectRelative,
     projectRelativePath,
+    missing: Boolean(raw.missing),
     lastValidation: raw.lastValidation || null,
   };
 }
@@ -423,26 +464,7 @@ async function refreshLibraryCountsForPrefix(prefix) {
       return;
     }
 
-    const now = new Date().toISOString();
-    const counts = {
-      symbol: Number(validation.counts?.symbol) || (validation.assets?.symbol ? 1 : 0),
-      footprint: Number(validation.counts?.footprint) || 0,
-      model: Number(validation.counts?.model) || 0,
-    };
-
-    state.libraries[index] = {
-      ...library,
-      symbolPath: normalizePath(validation.resolved_path || symbolPath) || library.symbolPath,
-      assets: {
-        symbol: Boolean(validation.assets?.symbol),
-        footprint: Boolean(validation.assets?.footprint),
-        model: Boolean(validation.assets?.model),
-      },
-      counts,
-      warnings: Array.isArray(validation.warnings) ? validation.warnings : [],
-      updatedAt: now,
-      lastValidation: now,
-    };
+    state.libraries[index] = buildLibraryStatus(library, validation);
 
     recalcLibraryTotals();
     await ensureSelectedLibrary();
@@ -470,7 +492,6 @@ async function inventoryLibraries() {
     })
   );
 
-  const now = new Date().toISOString();
   const results = new Map();
   entries.forEach((entry) => {
     if (entry.status === "fulfilled" && entry.value?.library) {
@@ -483,25 +504,7 @@ async function inventoryLibraries() {
     if (!validation) {
       return library;
     }
-    const counts = {
-      symbol: Number(validation.counts?.symbol) || (validation.assets?.symbol ? 1 : 0),
-      footprint: Number(validation.counts?.footprint) || 0,
-      model: Number(validation.counts?.model) || 0,
-    };
-    const resolvedSymbol = normalizePath(validation.resolved_path || library.symbolPath || "");
-    return {
-      ...library,
-      symbolPath: resolvedSymbol || library.symbolPath,
-      assets: {
-        symbol: Boolean(validation.assets?.symbol),
-        footprint: Boolean(validation.assets?.footprint),
-        model: Boolean(validation.assets?.model),
-      },
-      counts,
-      warnings: Array.isArray(validation.warnings) ? validation.warnings : [],
-      updatedAt: now,
-      lastValidation: now,
-    };
+    return buildLibraryStatus(library, validation);
   });
 
   recalcLibraryTotals();
@@ -542,6 +545,11 @@ async function checkHealth() {
   try {
     await apiFetch("health", { method: "GET" });
     state.connected = true;
+    try {
+      await inventoryLibraries();
+    } catch (error) {
+      console.warn("Library inventory failed during health check", error);
+    }
   } catch (error) {
     state.connected = false;
   }
@@ -829,6 +837,7 @@ async function handleCreateLibrary(payload = {}) {
     projectId: payload.projectId || existing?.projectId || "default",
     projectRelative,
     projectRelativePath,
+    missing: false,
     lastValidation: now,
   };
   const stored = upsertLibraryRecord(record);
@@ -897,6 +906,7 @@ async function handleImportLibrary(payload = {}) {
     projectId: payload.projectId || existing?.projectId || "default",
     projectRelative,
     projectRelativePath,
+    missing: !validation.exists,
     lastValidation: now,
   };
   const stored = upsertLibraryRecord(record);
@@ -938,6 +948,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     await ensureInitialized();
     switch (message.type) {
       case "getState":
+        try {
+          await inventoryLibraries();
+        } catch (error) {
+          console.warn("Library inventory failed during getState", error);
+        }
         return snapshotState();
       case "setServerUrl":
         state.serverUrl = message.url || DEFAULT_STATE.serverUrl;
@@ -1121,6 +1136,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             result: null,
             messages: [],
           };
+        }
+        const libraryPrefix = normalizePath(
+          historyMatch.libraryPath || historyMatch.libraryBasePath || historyMatch.output_path || ""
+        );
+        if (libraryPrefix) {
+          try {
+            const validation = await validateLibraryOnServer(libraryPrefix);
+            const index = state.libraries.findIndex(
+              (library) => normalizePath(library.path || library.resolvedPrefix || "") === libraryPrefix
+            );
+            if (index >= 0) {
+              state.libraries[index] = buildLibraryStatus(state.libraries[index], validation);
+              recalcLibraryTotals();
+              await persistState(["libraries", "libraryTotals"]);
+              broadcastState();
+            }
+            if (!validation.exists) {
+              return {
+                inProgress: false,
+                jobId: historyMatch.id,
+                status: historyMatch.status,
+                libraryName: historyMatch.libraryName,
+                libraryPath: historyMatch.libraryPath,
+                completed: false,
+                outputAnalysis: null,
+                partial: false,
+                missing: ["library"],
+                outputs: historyMatch.outputs,
+                result: null,
+                messages: ["Library path is missing on disk."],
+              };
+            }
+          } catch (error) {
+            console.warn("Library validation failed during checkComponentExists", error);
+          }
         }
         const analysis = analyzeJobOutputs(historyMatch);
         return {

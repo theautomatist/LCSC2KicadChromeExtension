@@ -12,7 +12,7 @@ from easyeda2kicad.kicad.parameters_kicad_symbol import KicadVersion
 
 sym_lib_regex_pattern = {
     "v5": r"(#\n# {component_name}\n#\n.*?ENDDEF\n)",
-    "v6": r'\n  \(symbol "{component_name}".*?\n  \)',
+    "v6": r'\n(?P<indent>[ \t]*)\(symbol "{component_name}".*?\n(?P=indent)\)',
     "v6_99": r"",
 }
 
@@ -93,20 +93,16 @@ def update_component_in_symbol_lib_file(
         pattern_template = sym_lib_regex_pattern[kicad_version.name]
 
     new_lib = current_lib
+    match_found = False
     for variant in _component_name_variants(component_name):
         candidate_pattern = pattern_template.format(
             component_name=sanitize_for_regex(variant)
         )
-        updated_lib = re.sub(
-            candidate_pattern,
-            component_content,
-            current_lib,
-            flags=re.DOTALL,
-        )
-        if updated_lib != current_lib:
-            new_lib = updated_lib
-            break
-    else:
+        if re.search(candidate_pattern, new_lib, flags=re.DOTALL):
+            new_lib = re.sub(candidate_pattern, "", new_lib, flags=re.DOTALL)
+            match_found = True
+
+    if not match_found:
         logging.warning(
             "Unable to locate symbol '%s' in %s for update; appending new entry instead.",
             component_name,
@@ -126,6 +122,12 @@ def update_component_in_symbol_lib_file(
 
     with open(file=lib_path, mode="w", encoding="utf-8") as lib_file:
         lib_file.write(new_lib)
+
+    add_component_in_symbol_lib_file(
+        lib_path=lib_path,
+        component_content=component_content,
+        kicad_version=kicad_version,
+    )
 
 
 def add_component_in_symbol_lib_file(

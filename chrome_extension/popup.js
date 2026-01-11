@@ -530,7 +530,9 @@ function renderLibraries() {
   }
 
   if (elements.headerActive) {
-    const active = sortedLibraries.find((item) => item.active) || sortedLibraries[0];
+    const active = sortedLibraries.find((item) => item.active)
+      || sortedLibraries.find((item) => !item.missing)
+      || sortedLibraries[0];
     if (active) {
       elements.headerActive.innerHTML = `
         <span class="header-active-arrow">➜</span>
@@ -572,6 +574,7 @@ function renderLibraries() {
     const item = document.createElement("div");
     item.className = "library-entry";
 	if (library.active) item.className += " active";
+    if (library.missing) item.className += " missing";
     item.dataset.id = library.id;
 
     const info = document.createElement("div");
@@ -603,8 +606,8 @@ function renderLibraries() {
     const toggle = document.createElement("input");
     toggle.type = "button";
     toggle.className = "library-toggle";
-    toggle.disabled = Boolean(library.active);
-	toggle.value = library.active ? "Active" : "Activate";
+    toggle.disabled = Boolean(library.active || library.missing);
+	toggle.value = library.active ? "Active" : (library.missing ? "Missing" : "Activate");
     toggle.dataset.id = library.id;
 	toggle.onclick = (event) => {
 		toggle.disabled = true;
@@ -626,6 +629,13 @@ function renderLibraries() {
     path.className = "library-meta";
     path.textContent = library.symbolPath || library.path || library.resolvedPrefix || "";
     info.appendChild(path);
+
+    if (library.missing) {
+      const warning = document.createElement("div");
+      warning.className = "library-warning";
+      warning.textContent = "Library missing on disk.";
+      info.appendChild(warning);
+    }
     item.append(info);
     elements.libraryList.appendChild(item);
   });

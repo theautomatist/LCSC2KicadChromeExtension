@@ -317,6 +317,11 @@ input[type=checkbox]:checked {
 	border-color: var(--accent);
 }
 
+#library-list .library-entry.missing {
+  opacity: 0.72;
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
 #library-list .library-entry:last-child {
   margin-bottom: 0;
 }
@@ -326,6 +331,12 @@ input[type=checkbox]:checked {
   font-size: 0.62rem;
   color: rgba(226, 232, 240, 0.65);
   margin-top: -0.1rem;
+}
+
+.library-warning {
+  color: #fbbf24;
+  font-size: 0.72rem;
+  margin-top: 0.35rem;
 }
 
 
