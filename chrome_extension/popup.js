@@ -282,6 +282,9 @@ function initModals() {
       elements.libraryImportInfo.className = "form-text";
       toggleLibraryProjectPath();
     });
+    elements.libraryModal.addEventListener("shown.bs.modal", () => {
+      toggleLibraryProjectPath();
+    });
   }
 }
 
@@ -375,12 +378,25 @@ function toggleLibraryProjectPath() {
   }
   const show = elements.libraryCreateProject.checked;
   elements.libraryCreateProjectPathGroup.hidden = !show;
-  if (show && elements.libraryCreateProjectPath) {
-    if (!elements.libraryCreateProjectPath.value) {
-      elements.libraryCreateProjectPath.value = state.settings.projectRelativePath || "";
-    }
+  if (show) {
+    syncLibraryCreateDefaults();
   } else if (elements.libraryCreateProjectPath) {
     elements.libraryCreateProjectPath.value = "";
+  }
+}
+
+function syncLibraryCreateDefaults() {
+  if (!elements.libraryCreateProjectPath || !elements.libraryCreateProject) {
+    return;
+  }
+  if (!elements.libraryCreateProject.checked) {
+    return;
+  }
+  if (elements.libraryCreateProjectPath.matches(":focus")) {
+    return;
+  }
+  if (!elements.libraryCreateProjectPath.value) {
+    elements.libraryCreateProjectPath.value = state.settings.projectRelativePath || "";
   }
 }
 
@@ -473,6 +489,7 @@ function applyState(snapshot = {}) {
   renderLibraries();
   renderPartsResult();
   renderSettings();
+  syncLibraryCreateDefaults();
 
   state.ready = true;
 }
