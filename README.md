@@ -1,12 +1,9 @@
-# easyeda2kicad companion
+# LCSC to KiCad Companion
 
-Convert EasyEDA/LCSC components into KiCad libraries and manage them from a Chrome extension. This repository now combines the core EasyEDA conversion project, a local backend API, and a browser extension that can create or update library files on your machine.
+This repo includes a Chrome extension that adds buttons on [lcsc.com](https://www.lcsc.com/) to import components directly into a selected KiCad library. The extension calls a local backend that uses easyeda2kicad to download symbol, footprint, and 3D model data from the EasyEDA library (when available). The backend is required because the extension cannot modify your filesystem or run CLI tools on its own.
 
 > [!WARNING]
 > EasyEDA source data can contain issues. ALWAYS CHECK PINS AND FOOTPRINTS before using converted parts in production designs.
-
-## Introduction
-This repo connects the LCSC catalog, a Chrome extension UI, and a local backend so you can generate and update KiCad libraries on your machine. The backend coordinates EasyEDA data fetching and KiCad export, while the extension provides the workflow inside your browser.
 
 ```mermaid
 flowchart LR
