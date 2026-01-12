@@ -159,6 +159,49 @@ class LibraryValidateResponse(BaseModel):
     model_path: Optional[str] = None
 
 
+class ComponentCheckRequest(BaseModel):
+    path: str
+    lcsc_id: str
+
+    @field_validator("lcsc_id")
+    @classmethod
+    def validate_lcsc(cls, value: str) -> str:
+        if not value or not value.startswith("C"):
+            raise ValueError("LCSC ID must start with 'C'")
+        return value
+
+
+class ComponentCheckResponse(BaseModel):
+    symbol_path: Optional[str] = None
+    footprint_path: Optional[str] = None
+    model_paths: Dict[str, str] = Field(default_factory=dict)
+    messages: List[str] = Field(default_factory=list)
+
+
+class ComponentBatchRequest(BaseModel):
+    path: str
+    lcsc_ids: List[str]
+
+    @field_validator("lcsc_ids")
+    @classmethod
+    def validate_lcsc_ids(cls, value: List[str]) -> List[str]:
+        cleaned = []
+        for entry in value:
+            if not entry:
+                continue
+            entry = entry.strip().upper()
+            if not entry.startswith("C"):
+                raise ValueError("LCSC ID must start with 'C'")
+            cleaned.append(entry)
+        if not cleaned:
+            raise ValueError("At least one LCSC ID is required.")
+        return cleaned
+
+
+class ComponentBatchResponse(BaseModel):
+    results: Dict[str, ComponentCheckResponse] = Field(default_factory=dict)
+
+
 def _normalize_library_prefix(base_path: str, library_name: str) -> Path:
     try:
         base = Path(base_path).expanduser().resolve(strict=False)
@@ -338,6 +381,262 @@ def _extract_model_path(footprint_dir: Path) -> Optional[str]:
             return None
         return model_path[:last_slash]
     return None
+
+
+def _extract_model_paths(footprint_path: Path, model_dir: Path) -> Dict[str, str]:
+    try:
+        content = footprint_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return {}
+
+    model_paths: Dict[str, str] = {}
+    for match in re.finditer(r'\(model\s+(?:"([^"]+)"|([^\s\)]+))', content):
+        raw_path = (match.group(1) or match.group(2) or "").strip()
+        if not raw_path:
+            continue
+        resolved = _resolve_model_candidate(raw_path, model_dir)
+        if resolved:
+            model_paths[resolved.name] = str(resolved)
+    return model_paths
+
+
+def _resolve_model_candidate(raw_path: str, model_dir: Path) -> Optional[Path]:
+    cleaned = raw_path.strip().replace("\\", "/")
+    if cleaned.startswith("${KIPRJMOD}"):
+        cleaned = cleaned[len("${KIPRJMOD}") :]
+    cleaned = cleaned.lstrip("/")
+
+    candidate = Path(cleaned)
+    if candidate.is_absolute():
+        if candidate.is_file():
+            return candidate
+        return None
+
+    for base in (model_dir, model_dir.parent):
+        resolved = (base / cleaned).resolve(strict=False)
+        if resolved.is_file():
+            return resolved
+
+    basename = Path(raw_path).name
+    if basename:
+        fallback = model_dir / basename
+        if fallback.is_file():
+            return fallback
+
+    return None
+
+
+def _iter_symbol_blocks_v6(content: str) -> List[str]:
+    blocks: List[str] = []
+    depth = 0
+    in_block = False
+    block_lines: List[str] = []
+    for line in content.splitlines():
+        if not in_block:
+            if line.lstrip().startswith("(symbol "):
+                in_block = True
+                depth = line.count("(") - line.count(")")
+                block_lines = [line]
+                if depth <= 0:
+                    blocks.append("\n".join(block_lines))
+                    in_block = False
+            continue
+        block_lines.append(line)
+        depth += line.count("(") - line.count(")")
+        if depth <= 0:
+            blocks.append("\n".join(block_lines))
+            in_block = False
+    return blocks
+
+
+def _iter_symbol_blocks_v5(content: str) -> List[str]:
+    blocks: List[str] = []
+    block_lines: List[str] = []
+    in_block = False
+    for line in content.splitlines():
+        if not in_block:
+            if line.startswith("DEF "):
+                in_block = True
+                block_lines = [line]
+            continue
+        block_lines.append(line)
+        if line.strip() == "ENDDEF":
+            blocks.append("\n".join(block_lines))
+            in_block = False
+    return blocks
+
+
+def _find_component_block(content: str, lcsc_id: str, suffix: str) -> Optional[Tuple[str, Optional[str]]]:
+    lcsc = lcsc_id.strip()
+    if not lcsc:
+        return None
+
+    blocks = _iter_symbol_blocks_v6(content) if suffix == ".kicad_sym" else _iter_symbol_blocks_v5(content)
+    if not blocks:
+        return None
+
+    if suffix == ".kicad_sym":
+        lcsc_pattern = re.compile(
+            rf'\(property\s+"LCSC Part"\s+"{re.escape(lcsc)}"',
+            re.IGNORECASE | re.DOTALL,
+        )
+        footprint_pattern = re.compile(
+            r'\(property\s+"Footprint"\s+"([^"]+)"',
+            re.IGNORECASE | re.DOTALL,
+        )
+    else:
+        lcsc_pattern = re.compile(
+            rf'^\s*F6\s+"{re.escape(lcsc)}".*LCSC Part',
+            re.IGNORECASE | re.MULTILINE,
+        )
+        footprint_pattern = re.compile(r'^\s*F2\s+"([^"]*)"', re.MULTILINE)
+
+    for block in blocks:
+        if not lcsc_pattern.search(block):
+            continue
+        footprint_match = footprint_pattern.search(block)
+        footprint_ref = footprint_match.group(1).strip() if footprint_match else None
+        return block, footprint_ref
+    return None
+
+
+def _check_component_in_library(path: str, lcsc_id: str) -> ComponentCheckResponse:
+    try:
+        target = Path(path).expanduser()
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {path}") from exc
+
+    resolved = target.resolve(strict=False)
+    lower_suffix = resolved.suffix.lower()
+    if lower_suffix in {".kicad_sym", ".lib"}:
+        symbol_candidates = [resolved]
+        library_root = resolved.with_suffix("")
+    else:
+        symbol_candidates = [resolved.with_suffix(".kicad_sym"), resolved.with_suffix(".lib")]
+        library_root = resolved
+
+    symbol_path = next((candidate for candidate in symbol_candidates if candidate.is_file()), None)
+    if not symbol_path:
+        return ComponentCheckResponse(messages=["Symbol library not found."])
+
+    try:
+        content = symbol_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ComponentCheckResponse(messages=["Unable to read symbol library."])
+
+    match = _find_component_block(content, lcsc_id, symbol_path.suffix.lower())
+    if not match:
+        return ComponentCheckResponse(messages=["Component not found in library."])
+
+    _block, footprint_ref = match
+    footprint_path: Optional[Path] = None
+    if footprint_ref:
+        footprint_name = footprint_ref.split(":")[-1].strip()
+        if footprint_name:
+            footprint_path = library_root.with_suffix(".pretty") / f"{footprint_name}.kicad_mod"
+
+    model_paths: Dict[str, str] = {}
+    if footprint_path and footprint_path.is_file():
+        model_dir = library_root.with_suffix(".3dshapes")
+        model_paths = _extract_model_paths(footprint_path, model_dir)
+
+    return ComponentCheckResponse(
+        symbol_path=str(symbol_path),
+        footprint_path=str(footprint_path) if footprint_path and footprint_path.is_file() else None,
+        model_paths=model_paths,
+        messages=[],
+    )
+
+
+def _index_symbols_by_lcsc(content: str, suffix: str) -> Dict[str, Optional[str]]:
+    mapping: Dict[str, Optional[str]] = {}
+    if suffix == ".kicad_sym":
+        for block in _iter_symbol_blocks_v6(content):
+            lcsc_match = re.search(
+                r'\(property\s+"LCSC Part"\s+"([^"]+)"',
+                block,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if not lcsc_match:
+                continue
+            lcsc_id = lcsc_match.group(1).strip().upper()
+            footprint_match = re.search(
+                r'\(property\s+"Footprint"\s+"([^"]+)"',
+                block,
+                re.IGNORECASE | re.DOTALL,
+            )
+            footprint_ref = footprint_match.group(1).strip() if footprint_match else None
+            mapping[lcsc_id] = footprint_ref
+        return mapping
+
+    for block in _iter_symbol_blocks_v5(content):
+        lcsc_match = re.search(
+            r'^\s*F6\s+"([^"]+)".*LCSC Part',
+            block,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if not lcsc_match:
+            continue
+        lcsc_id = lcsc_match.group(1).strip().upper()
+        footprint_match = re.search(r'^\s*F2\s+"([^"]*)"', block, re.MULTILINE)
+        footprint_ref = footprint_match.group(1).strip() if footprint_match else None
+        mapping[lcsc_id] = footprint_ref
+    return mapping
+
+
+def _check_components_in_library(path: str, lcsc_ids: List[str]) -> ComponentBatchResponse:
+    try:
+        target = Path(path).expanduser()
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {path}") from exc
+
+    resolved = target.resolve(strict=False)
+    lower_suffix = resolved.suffix.lower()
+    if lower_suffix in {".kicad_sym", ".lib"}:
+        symbol_candidates = [resolved]
+        library_root = resolved.with_suffix("")
+    else:
+        symbol_candidates = [resolved.with_suffix(".kicad_sym"), resolved.with_suffix(".lib")]
+        library_root = resolved
+
+    symbol_path = next((candidate for candidate in symbol_candidates if candidate.is_file()), None)
+    results: Dict[str, ComponentCheckResponse] = {}
+    if not symbol_path:
+        for lcsc_id in lcsc_ids:
+            results[lcsc_id] = ComponentCheckResponse(messages=["Symbol library not found."])
+        return ComponentBatchResponse(results=results)
+
+    try:
+        content = symbol_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        for lcsc_id in lcsc_ids:
+            results[lcsc_id] = ComponentCheckResponse(messages=["Unable to read symbol library."])
+        return ComponentBatchResponse(results=results)
+
+    index = _index_symbols_by_lcsc(content, symbol_path.suffix.lower())
+
+    for lcsc_id in lcsc_ids:
+        footprint_ref = index.get(lcsc_id)
+        if not footprint_ref:
+            results[lcsc_id] = ComponentCheckResponse(messages=["Component not found in library."])
+            continue
+        footprint_name = footprint_ref.split(":")[-1].strip()
+        footprint_path = (
+            library_root.with_suffix(".pretty") / f"{footprint_name}.kicad_mod"
+            if footprint_name
+            else None
+        )
+        model_paths: Dict[str, str] = {}
+        if footprint_path and footprint_path.is_file():
+            model_dir = library_root.with_suffix(".3dshapes")
+            model_paths = _extract_model_paths(footprint_path, model_dir)
+        results[lcsc_id] = ComponentCheckResponse(
+            symbol_path=str(symbol_path),
+            footprint_path=str(footprint_path) if footprint_path and footprint_path.is_file() else None,
+            model_paths=model_paths,
+            messages=[],
+        )
+    return ComponentBatchResponse(results=results)
 
 
 def _count_symbols_in_file(path: Path) -> int:
@@ -727,6 +1026,14 @@ def create_app(
     @router.post("/libraries/validate", response_model=LibraryValidateResponse)
     async def libraries_validate(payload: LibraryValidateRequest) -> LibraryValidateResponse:
         return _inspect_library(payload.path)
+
+    @router.post("/libraries/component", response_model=ComponentCheckResponse)
+    async def libraries_component(payload: ComponentCheckRequest) -> ComponentCheckResponse:
+        return _check_component_in_library(payload.path, payload.lcsc_id)
+
+    @router.post("/libraries/components", response_model=ComponentBatchResponse)
+    async def libraries_components(payload: ComponentBatchRequest) -> ComponentBatchResponse:
+        return _check_components_in_library(payload.path, payload.lcsc_ids)
 
     @router.get("/tasks/{task_id}", response_model=TaskDetail)
     async def retrieve_task(task: TaskRecord = Depends(get_task)) -> TaskDetail:

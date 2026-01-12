@@ -21,6 +21,8 @@ const activeObservers = new Set();
 let spinnerStyleInjected = false;
 let debugEnabled = false;
 let currentUrl = window.location.href;
+const listValidationQueue = new Map();
+let listValidationTimer = null;
 
 function sendRuntimeMessage(payload, { retries = 3, delay = 250 } = {}) {
   return new Promise((resolve, reject) => {
@@ -349,6 +351,41 @@ function updateButtonState(button, state, options = {}) {
   }
 }
 
+function applyComponentState(button, data) {
+  const messages = Array.isArray(data.messages) ? data.messages : [];
+  const analysis = data.outputAnalysis
+    || computeOutputAnalysis({ outputs: data.outputs, result: data.result });
+
+  if (data.completed) {
+    if (analysis.partial) {
+      updateButtonState(button, "partial", {
+        message: messages.join(" • ") || formatMissingTooltip(analysis.missing),
+        iconType: "download",
+      });
+    } else {
+      const tooltip = buildSuccessTooltip(analysis, messages);
+      updateButtonState(button, "success", {
+        message: tooltip || "Already in library",
+      });
+    }
+    button.dataset[INIT_ATTR] = "true";
+    return;
+  }
+
+  if (data.inProgress && data.jobId) {
+    updateButtonState(button, "progress", {
+      progress: 0,
+      message: "Conversion in progress…",
+    });
+    startJobWatcher(button, data.jobId);
+    button.dataset[INIT_ATTR] = "true";
+    return;
+  }
+
+  updateButtonState(button, "idle");
+  button.dataset[INIT_ATTR] = "true";
+}
+
 function attachButton(lcscId) {
   const tbody = findInsertionPoint();
   if (!tbody) {
@@ -403,7 +440,7 @@ function insertListButton(container, lcscId) {
       if (button && button.dataset[INIT_ATTR] !== "true") {
         updateButtonState(button, "idle");
         button.dataset[INIT_ATTR] = "false";
-        initialiseButtonState(button, lcscId);
+        queueListValidation(button, lcscId);
       }
       return;
     }
@@ -416,7 +453,7 @@ function insertListButton(container, lcscId) {
     newButton.dataset[INIT_ATTR] = "false";
     newButton.addEventListener("click", () => handleDownloadClick(newButton, lcscId));
     existingHolder.appendChild(newButton);
-    initialiseButtonState(newButton, lcscId);
+    queueListValidation(newButton, lcscId);
     return;
   }
 
@@ -435,7 +472,7 @@ function insertListButton(container, lcscId) {
   holder.appendChild(button);
   container.appendChild(holder);
 
-  initialiseButtonState(button, lcscId);
+  queueListValidation(button, lcscId);
   dbg("insertListButton: added", lcscId);
 }
 
@@ -529,35 +566,8 @@ async function initialiseButtonState(button, lcscId) {
       throw new Error(response?.error || "Failed to check library status");
     }
     const data = response.data || {};
-    const messages = Array.isArray(data.messages) ? data.messages : [];
-    const analysis = data.outputAnalysis
-      || computeOutputAnalysis({ outputs: data.outputs, result: data.result });
     dbg("initialiseButtonState", lcscId, data);
-    if (data.completed) {
-      if (analysis.partial) {
-        updateButtonState(button, "partial", {
-          message: messages.join(" • ") || formatMissingTooltip(analysis.missing),
-          iconType: "download",
-        });
-        button.dataset[INIT_ATTR] = "true";
-      } else {
-        const tooltip = buildSuccessTooltip(analysis, messages);
-        updateButtonState(button, "success", {
-        message: tooltip || "Already in library",
-        });
-        button.dataset[INIT_ATTR] = "true";
-      }
-    } else if (data.inProgress && data.jobId) {
-      updateButtonState(button, "progress", {
-        progress: 0,
-        message: "Conversion in progress…",
-      });
-      startJobWatcher(button, data.jobId);
-      button.dataset[INIT_ATTR] = "true";
-    } else {
-      updateButtonState(button, "idle");
-      button.dataset[INIT_ATTR] = "true";
-    }
+    applyComponentState(button, data);
   } catch (error) {
     dbg("checkComponentExists failed", error);
     const message = error?.message || "";
@@ -570,6 +580,81 @@ async function initialiseButtonState(button, lcscId) {
       updateButtonState(button, "idle");
     }
     button.dataset[INIT_ATTR] = "true";
+  }
+}
+
+function queueListValidation(button, lcscId) {
+  if (!button || !lcscId) {
+    return;
+  }
+  if (button.dataset[INIT_ATTR] === "true") {
+    return;
+  }
+  const normalized = lcscId.toUpperCase();
+  const entry = listValidationQueue.get(normalized) || new Set();
+  entry.add(button);
+  listValidationQueue.set(normalized, entry);
+  scheduleListValidation();
+}
+
+function scheduleListValidation(delay = 300) {
+  if (listValidationTimer) {
+    clearTimeout(listValidationTimer);
+  }
+  listValidationTimer = setTimeout(runListValidation, delay);
+}
+
+async function runListValidation() {
+  if (!listValidationQueue.size) {
+    return;
+  }
+  const queued = new Map(listValidationQueue);
+  listValidationQueue.clear();
+  listValidationTimer = null;
+
+  const lcscIds = Array.from(queued.keys());
+  try {
+    const response = await sendRuntimeMessage(
+      {
+        type: "checkComponentsExists",
+        lcscIds,
+      },
+      { retries: 3, delay: 300 },
+    );
+    if (!response?.ok) {
+      throw new Error(response?.error || "Failed to check library status");
+    }
+    const results = response.data?.results || {};
+    lcscIds.forEach((lcscId) => {
+      const data = results[lcscId] || {};
+      const buttons = queued.get(lcscId);
+      if (!buttons) {
+        return;
+      }
+      buttons.forEach((button) => {
+        applyComponentState(button, data);
+      });
+    });
+  } catch (error) {
+    dbg("checkComponentsExists failed", error);
+    const message = error?.message || "";
+    lcscIds.forEach((lcscId) => {
+      const buttons = queued.get(lcscId);
+      if (!buttons) {
+        return;
+      }
+      buttons.forEach((button) => {
+        if (/backend/i.test(message) || /reach/i.test(message)) {
+          updateButtonState(button, "partial", {
+            message: "Backend offline. Status unknown.",
+            iconType: "download",
+          });
+        } else {
+          updateButtonState(button, "idle");
+        }
+        button.dataset[INIT_ATTR] = "true";
+      });
+    });
   }
 }
 
@@ -652,6 +737,11 @@ function cleanupInjectedUi() {
     holder.remove();
   });
   jobWatchers.forEach((_, jobId) => clearJobWatcher(jobId));
+  listValidationQueue.clear();
+  if (listValidationTimer) {
+    clearTimeout(listValidationTimer);
+    listValidationTimer = null;
+  }
 }
 
 function setupForCurrentRoute() {

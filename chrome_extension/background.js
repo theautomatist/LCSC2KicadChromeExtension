@@ -259,6 +259,32 @@ function analyzeJobOutputs(job = {}) {
   };
 }
 
+function buildComponentStatus({ lcscId, check, libraryPrefix, selectedLibrary }) {
+  const normalized = check && typeof check === "object" ? check : {};
+  const result = {
+    symbol_path: normalized.symbol_path || null,
+    footprint_path: normalized.footprint_path || null,
+    model_paths: normalized.model_paths || {},
+  };
+  const outputs = { symbol: true, footprint: true, model: true };
+  const analysis = analyzeJobOutputs({ outputs, result });
+  const completed = Boolean(result.symbol_path);
+  return {
+    inProgress: false,
+    jobId: null,
+    status: completed ? "completed" : null,
+    libraryName: selectedLibrary?.name || null,
+    libraryPath: libraryPrefix,
+    completed,
+    outputAnalysis: analysis,
+    partial: Boolean(analysis && analysis.partial),
+    missing: analysis?.missing || [],
+    outputs,
+    result,
+    messages: normalized.messages || [],
+  };
+}
+
 function buildLibraryPrefix(basePath, libraryName) {
   const normalizedBase = normalizePath(basePath);
   let sanitizedName = sanitizeLibraryName(libraryName);
@@ -447,6 +473,22 @@ async function validateLibraryOnServer(path) {
   const response = await apiFetch("libraries/validate", {
     method: "POST",
     body: JSON.stringify({ path }),
+  });
+  return response.json();
+}
+
+async function checkComponentOnServer(path, lcscId) {
+  const response = await apiFetch("libraries/component", {
+    method: "POST",
+    body: JSON.stringify({ path, lcsc_id: lcscId }),
+  });
+  return response.json();
+}
+
+async function checkComponentsOnServer(path, lcscIds) {
+  const response = await apiFetch("libraries/components", {
+    method: "POST",
+    body: JSON.stringify({ path, lcsc_ids: lcscIds }),
   });
   return response.json();
 }
@@ -1154,43 +1196,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (!lcscId || !lcscId.startsWith("C")) {
           throw new Error("Ungültige LCSC ID.");
         }
-        const historyMatch = state.jobHistory.find(
-          (entry) => entry.lcscId === lcscId && entry.status === "completed",
-        );
-        if (!historyMatch) {
+        const activeJob = Object.values(state.jobs || {}).find((job) => job.lcscId === lcscId);
+        if (activeJob) {
           return {
-            inProgress: false,
-            jobId: null,
-            status: null,
-            libraryName: null,
-            libraryPath: null,
+            inProgress: true,
+            jobId: activeJob.id,
+            status: activeJob.status,
+            libraryName: activeJob.libraryName,
+            libraryPath: activeJob.libraryPath,
             completed: false,
-            outputAnalysis: null,
+            outputAnalysis: analyzeJobOutputs(activeJob),
             partial: false,
             missing: [],
-            outputs: null,
-            result: null,
-            messages: [],
+            outputs: activeJob.outputs,
+            result: activeJob.result,
+            messages: activeJob.result?.messages || activeJob.messages || [],
           };
         }
+
+        const selectedLibrary = getSelectedLibraryRecord();
         const libraryPrefix = normalizePath(
-          historyMatch.libraryPath || historyMatch.libraryBasePath || historyMatch.output_path || ""
+          deriveLibraryPrefix(selectedLibrary) || state.selectedLibraryPath || state.defaultLibraryPath || ""
         );
         if (!libraryPrefix) {
-          return {
-            inProgress: false,
-            jobId: historyMatch.id,
-            status: historyMatch.status,
-            libraryName: historyMatch.libraryName,
-            libraryPath: historyMatch.libraryPath,
-            completed: false,
-            outputAnalysis: null,
-            partial: false,
-            missing: ["library"],
-            outputs: historyMatch.outputs,
-            result: null,
-            messages: ["Library path is missing on disk."],
-          };
+          throw new Error("Please select a library in the extension.");
         }
 
         const validation = await validateLibraryOnServer(libraryPrefix);
@@ -1206,34 +1235,128 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (!validation.exists) {
           return {
             inProgress: false,
-            jobId: historyMatch.id,
-            status: historyMatch.status,
-            libraryName: historyMatch.libraryName,
-            libraryPath: historyMatch.libraryPath,
+            jobId: null,
+            status: null,
+            libraryName: selectedLibrary?.name || null,
+            libraryPath: libraryPrefix,
             completed: false,
             outputAnalysis: null,
             partial: false,
             missing: ["library"],
-            outputs: historyMatch.outputs,
+            outputs: null,
             result: null,
             messages: ["Library path is missing on disk."],
           };
         }
-        const analysis = analyzeJobOutputs(historyMatch);
-        return {
-          inProgress: false,
-          jobId: historyMatch.id,
-          status: historyMatch.status,
-          libraryName: historyMatch.libraryName,
-          libraryPath: historyMatch.libraryPath,
-          completed: true,
-          outputAnalysis: analysis,
-          partial: Boolean(analysis && analysis.partial),
-          missing: analysis?.missing || [],
-          outputs: historyMatch.outputs,
-          result: historyMatch.result,
-          messages: historyMatch.result?.messages || historyMatch.messages || [],
-        };
+
+        const check = await checkComponentOnServer(libraryPrefix, lcscId);
+        return buildComponentStatus({
+          lcscId,
+          check,
+          libraryPrefix,
+          selectedLibrary,
+        });
+      }
+      case "checkComponentsExists": {
+        if (!state.connected) {
+          const connected = await checkHealth();
+          if (!connected) {
+            throw new Error("Backend not reachable. Start the backend.");
+          }
+        }
+        const ids = Array.isArray(message.lcscIds)
+          ? Array.from(
+              new Set(
+                message.lcscIds
+                  .map((id) => (id || "").trim().toUpperCase())
+                  .filter((id) => id),
+              ),
+            )
+          : [];
+        if (!ids.length) {
+          throw new Error("No component IDs supplied.");
+        }
+
+        const selectedLibrary = getSelectedLibraryRecord();
+        const libraryPrefix = normalizePath(
+          deriveLibraryPrefix(selectedLibrary) || state.selectedLibraryPath || state.defaultLibraryPath || ""
+        );
+        if (!libraryPrefix) {
+          throw new Error("Please select a library in the extension.");
+        }
+
+        const validation = await validateLibraryOnServer(libraryPrefix);
+        const index = state.libraries.findIndex(
+          (library) => normalizePath(library.path || library.resolvedPrefix || "") === libraryPrefix
+        );
+        if (index >= 0) {
+          state.libraries[index] = buildLibraryStatus(state.libraries[index], validation);
+          recalcLibraryTotals();
+          await persistState(["libraries", "libraryTotals"]);
+          broadcastState();
+        }
+        if (!validation.exists) {
+          const results = {};
+          ids.forEach((lcscId) => {
+            results[lcscId] = {
+              inProgress: false,
+              jobId: null,
+              status: null,
+              libraryName: selectedLibrary?.name || null,
+              libraryPath: libraryPrefix,
+              completed: false,
+              outputAnalysis: null,
+              partial: false,
+              missing: ["library"],
+              outputs: null,
+              result: null,
+              messages: ["Library path is missing on disk."],
+            };
+          });
+          return { results };
+        }
+
+        const activeJobs = Object.values(state.jobs || {}).reduce((acc, job) => {
+          if (job?.lcscId) {
+            acc[job.lcscId] = job;
+          }
+          return acc;
+        }, {});
+
+        const backendResult = await checkComponentsOnServer(libraryPrefix, ids);
+        const checks = backendResult?.results || {};
+        const results = {};
+
+        ids.forEach((lcscId) => {
+          const activeJob = activeJobs[lcscId];
+          if (activeJob) {
+            results[lcscId] = {
+              inProgress: true,
+              jobId: activeJob.id,
+              status: activeJob.status,
+              libraryName: activeJob.libraryName,
+              libraryPath: activeJob.libraryPath,
+              completed: false,
+              outputAnalysis: analyzeJobOutputs(activeJob),
+              partial: false,
+              missing: [],
+              outputs: activeJob.outputs,
+              result: activeJob.result,
+              messages: activeJob.result?.messages || activeJob.messages || [],
+            };
+            return;
+          }
+
+          const check = checks[lcscId] || {};
+          results[lcscId] = buildComponentStatus({
+            lcscId,
+            check,
+            libraryPrefix,
+            selectedLibrary,
+          });
+        });
+
+        return { results };
       }
       case "submitJob":
         return submitJob(message.payload);
