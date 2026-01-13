@@ -84,18 +84,16 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p out
-          OUTPUT_NAME="${VERSION}-${APP_NAME}"
+          OUTPUT_NAME="${VERSION}-${APP_NAME}-${OS_NAME}"
           cp "dist/$APP_NAME" "out/$OUTPUT_NAME"
-          zip -j "out/${OUTPUT_NAME}-${OS_NAME}.zip" "out/$OUTPUT_NAME"
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
-          $OutputName = "$env:VERSION-$env:APP_NAME"
+          $OutputName = "$env:VERSION-$env:APP_NAME-$env:OS_NAME"
           Copy-Item "dist\\$env:APP_NAME.exe" "out\\$OutputName.exe"
-          Compress-Archive -Path "out\\$OutputName.exe" -DestinationPath "out\\$OutputName-$env:OS_NAME.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
