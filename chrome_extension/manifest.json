@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "LCSC2KiCad",
-  "version": "1.0.0",
-  "description": "Adds LCSC download buttons and uses a local backend to save EasyEDA parts as KiCad libraries.",
+  "name": "KiCad Parts Importer",
+  "version": "1.0.1",
+  "description": "Download KiCad symbols, footprints & 3D models from LCSC in one click.",
   "permissions": [
     "storage",
     "notifications"
@@ -16,7 +16,9 @@
       "matches": [
         "https://www.lcsc.com/*"
       ],
-      "js": ["contentScript.js"],
+      "js": [
+        "contentScript.js"
+      ],
       "run_at": "document_idle"
     }
   ],

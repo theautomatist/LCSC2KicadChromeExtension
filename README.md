@@ -1,9 +1,13 @@
-# LCSC to KiCad Companion
+# LCSC to KiCad
 
 This repo includes a Chrome extension that adds buttons on [lcsc.com](https://www.lcsc.com/) to import components directly into a selected KiCad library. The extension calls a local backend that uses easyeda2kicad to download symbol, footprint, and 3D model data from the EasyEDA library (when available). The backend is required because the extension cannot modify your filesystem or run CLI tools on its own.
 
 > [!WARNING]
 > EasyEDA source data can contain issues. ALWAYS CHECK PINS AND FOOTPRINTS before using converted parts in production designs.
+
+<p align="center">
+  <img src="/img/store_images/store-card.jpg" alt="store-card" />
+</p>
 
 ```mermaid
 flowchart LR
@@ -19,20 +23,11 @@ flowchart LR
 - `chrome_extension/`: Chrome MV3 extension UI that talks to the local backend.
 
 ## Quick start
-1. Create a virtual environment and install dependencies:
-   ```bash
-   python -m venv env
-   source env/bin/activate
-   python -m pip install -r requirements.txt
-   ```
-2. Start the backend:
-   ```bash
-   python run_server.py --host 0.0.0.0 --port 8087
-   ```
-3. Load the extension:
-   - Open `chrome://extensions`, enable Developer mode, click "Load unpacked".
-   - Select the `chrome_extension/` folder.
-4. Browse `https://www.lcsc.com/` and use the extension to export components.
+1. Install the extension:
+   - Chrome Web Store: [KiCad Importer](https://chromewebstore.google.com/detail/ojkpgmndjlkghmaccanfophkcngdkpmi)
+   - Or load locally: open `chrome://extensions`, enable Developer mode, click "Load unpacked", select `chrome_extension/`.
+2. Download the backend package from the Releases page and start it.
+3. Browse `https://www.lcsc.com/` and use the extension to export components.
 
 ## UI and LCSC Website Integration
 | Extension settings | Library management |
