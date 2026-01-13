@@ -1,4 +1,4 @@
-# KiCadPartsImporter
+# KiCad Parts Importer
 
 This repo includes a Chrome extension that adds buttons on [lcsc.com](https://www.lcsc.com/) to import components directly into a selected KiCad library. The extension calls a local backend that uses easyeda2kicad to download symbol, footprint, and 3D model data from the EasyEDA library (when available). The backend is required because the extension cannot modify your filesystem or run CLI tools on its own.
 
@@ -24,12 +24,12 @@ flowchart LR
 
 ## Quick start
 1. Install the extension:
-   - Chrome Web Store: [KiCadPartsImporter](https://chromewebstore.google.com/detail/ojkpgmndjlkghmaccanfophkcngdkpmi)
+   - Chrome Web Store: [KiCad Parts Importer](https://chromewebstore.google.com/detail/ojkpgmndjlkghmaccanfophkcngdkpmi)
    - Or load locally: open `chrome://extensions`, enable Developer mode, click "Load unpacked", select `chrome_extension/`.
 2. Download the backend from the [Releases](https://github.com/theautomatist/LCSC2KiCad/releases) page and start it:
-   - macOS/Linux: `chmod +x ./<version>-KiCadPartsImporter-<OS>` then `./<version>-KiCadPartsImporter-<OS>`
-   - macOS Gatekeeper: `xattr -dr com.apple.quarantine ./<version>-KiCadPartsImporter-Mac`
-   - Windows: run `<version>-KiCadPartsImporter-Windows.exe`
+   - macOS/Linux: `chmod +x "./<version>-KiCad Parts Importer-<OS>"` then `./"<version>-KiCad Parts Importer-<OS>"`
+   - macOS Gatekeeper: `xattr -dr com.apple.quarantine "./<version>-KiCad Parts Importer-Mac"`
+   - Windows: run `"<version>-KiCad Parts Importer-Windows.exe"`
 3. Browse `https://www.lcsc.com/` and use the extension to export components.
 
 ## UI and LCSC Website Integration

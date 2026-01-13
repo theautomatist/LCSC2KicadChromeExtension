@@ -18,7 +18,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     env:
-      APP_NAME: KiCadPartsImporter
+      APP_NAME: "KiCad Parts Importer"
       PYTHON_VERSION: "3.11"
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +98,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.VERSION }}-KiCadPartsImporter-${{ env.OS_NAME }}
+          name: "${{ env.VERSION }}-KiCad Parts Importer-${{ env.OS_NAME }}"
           path: out/*
 
   package-extension:
@@ -128,13 +128,13 @@ jobs:
         run: |
           SRC="$EXT_DIR"
           if [ -d "$EXT_DIR/dist" ]; then SRC="$EXT_DIR/dist"; fi
-          zip -r "${VERSION}-KiCadPartsImporter-Chrome.zip" "$SRC" -x "**/node_modules/**" "**/.git/**" "**/.vscode/**" "**/*.map"
+          zip -r "${VERSION}-KiCad Parts Importer-Chrome.zip" "$SRC" -x "**/node_modules/**" "**/.git/**" "**/.vscode/**" "**/*.map"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.VERSION }}-KiCadPartsImporter-Chrome
-          path: ${{ env.VERSION }}-KiCadPartsImporter-Chrome.zip
+          name: "${{ env.VERSION }}-KiCad Parts Importer-Chrome"
+          path: "${{ env.VERSION }}-KiCad Parts Importer-Chrome.zip"
 
   release:
     name: Publish release
