@@ -26,7 +26,7 @@ flowchart LR
 1. Install the extension:
    - Chrome Web Store: [KiCad Parts Importer](https://chromewebstore.google.com/detail/ojkpgmndjlkghmaccanfophkcngdkpmi)
    - Or load locally: open `chrome://extensions`, enable Developer mode, click "Load unpacked", select `chrome_extension/`.
-2. Download the backend from the [Releases](/releases) page and start it:
+2. Download the backend from the [Releases](../../releases) page and start it:
    - macOS/Linux: `chmod +x "./<version>-KiCad Parts Importer-<OS>"` then `./"<version>-KiCad Parts Importer-<OS>"`
    - macOS Gatekeeper: `xattr -dr com.apple.quarantine "./<version>-KiCad Parts Importer-Mac"`
    - Windows: run `"<version>-KiCad Parts Importer-Windows.exe"`
